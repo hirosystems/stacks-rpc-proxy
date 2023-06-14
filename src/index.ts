@@ -9,6 +9,7 @@ import cors from '@fastify/cors';
 import { ENV, logger } from './util';
 import { setupShutdownHandler } from './shutdown';
 import { isTxMulticastEnabled, performTxMulticast } from './tx-post-multicast';
+import { getCacheControlHeader } from './cache-control';
 
 // TODO: prometheus metrics (use same setup as Stacks API?)
 
@@ -107,12 +108,15 @@ function handleProxyResponse(
   reply: FastifyReply,
   response: Readable
 ) {
+  // Handle request/response logging
   if (ENV.LOG_REQUESTS) {
     request = addRequestLogging(request, reply);
   }
   if (ENV.LOG_RESPONSES) {
     response = addResponseLogging(request, reply, response);
   }
+
+  // Handle tx-multicast config
   if (
     isTxMulticastEnabled() &&
     request.method === 'POST' &&
@@ -122,6 +126,13 @@ function handleProxyResponse(
       logger.error(error, `Error performing tx-multicast: ${error}`);
     });
   }
+
+  // Handle custom cache-control header config
+  const cacheControl = getCacheControlHeader(reply.statusCode, request.url);
+  if (cacheControl) {
+    reply.header('Cache-Control', cacheControl);
+  }
+
   reply.send(response);
 }
 
@@ -171,10 +182,6 @@ export async function startServer(): Promise<{
       done();
     },
     replyOptions: {
-      rewriteRequestHeaders(request, headers) {
-        headers['x-test'] = '1234';
-        return headers;
-      },
       onResponse(req, rep, res) {
         handleProxyResponse(
           req as FastifyRequest,
