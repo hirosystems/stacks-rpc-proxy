@@ -31,6 +31,10 @@ const schema = Type.Object({
   STACKS_API_EXTRA_TX_ENDPOINTS_FILE: Type.String({
     default: './config/extra-tx-endpoints.txt',
   }),
+  MAX_REQUEST_BODY_SIZE: Type.Number({
+    default: 1024 * 1024 * 2,
+    description: 'Max HTTP request body content size in bytes, defaults to 2MB',
+  }),
   LOG_RESPONSES: Type.Boolean({
     default: false,
     description:

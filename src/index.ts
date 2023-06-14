@@ -1,4 +1,5 @@
 import { Readable, Transform } from 'node:stream';
+import { IncomingMessage } from 'node:http';
 import fastify, {
   FastifyInstance,
   FastifyReply,
@@ -14,8 +15,6 @@ import { getCacheControlHeader } from './cache-control';
 // TODO: prometheus metrics (use same setup as Stacks API?)
 
 // TODO: configure error level strings for grafana/loki?
-
-// TODO: add cache-control header rewriting support
 
 const STACKS_NODE_RPC_PREFIX = '/v2';
 
@@ -72,7 +71,7 @@ function addResponseLogging(
   });
 }
 
-function addRequestLogging(req: FastifyRequest, reply: FastifyReply) {
+function addRequestLogging(req: FastifyRequest) {
   const bodyString =
     (req.body as Buffer)?.toString('utf8') ?? '<no request body>';
   logger.debug(
@@ -110,7 +109,7 @@ function handleProxyResponse(
 ) {
   // Handle request/response logging
   if (ENV.LOG_REQUESTS) {
-    request = addRequestLogging(request, reply);
+    request = addRequestLogging(request);
   }
   if (ENV.LOG_RESPONSES) {
     response = addResponseLogging(request, reply, response);
@@ -140,7 +139,7 @@ export async function startServer(): Promise<{
   address: string;
   server: FastifyInstance;
 }> {
-  const server = fastify({ logger });
+  const server = fastify({ logger, bodyLimit: ENV.MAX_REQUEST_BODY_SIZE });
 
   await server.register(cors, {
     preflightContinue: false, // Do _not_ pass the CORS preflight OPTIONS request to stacks-node because its http server doesn't properly support it
@@ -154,23 +153,36 @@ export async function startServer(): Promise<{
   const upstream = `http://${ENV.STACKS_CORE_PROXY_HOST}:${ENV.STACKS_CORE_PROXY_PORT}${STACKS_NODE_RPC_PREFIX}`;
   logger.info(`Proxying to upstream: ${upstream}`);
 
-  server.addContentTypeParser('application/json', (req, payload, done) => {
+  function bodyParser(
+    req: FastifyRequest,
+    payload: IncomingMessage,
+    done: (err: Error | null, body?: any) => void
+  ) {
+    let totalBytes = 0;
     const chunks: Uint8Array[] = [];
-    payload.on('data', (chunk) => chunks.push(chunk));
-    payload.on('end', () => done(null, Buffer.concat(chunks)));
+    payload.on('data', (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes > ENV.MAX_REQUEST_BODY_SIZE) {
+        const error = new Error(
+          `Request body size exceeds limit of ${ENV.MAX_REQUEST_BODY_SIZE} bytes`
+        );
+        Object.assign(error, { statusCode: 413 });
+        done(error, undefined);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    payload.on('end', () => {
+      done(null, Buffer.concat(chunks));
+    });
     payload.on('error', (error) => {
       done(error, null);
     });
-  });
+  }
 
-  server.addContentTypeParser('*', (req, payload, done) => {
-    const chunks: Uint8Array[] = [];
-    payload.on('data', (chunk) => chunks.push(chunk));
-    payload.on('end', () => done(null, Buffer.concat(chunks)));
-    payload.on('error', (error) => {
-      done(error, null);
-    });
-  });
+  // Parse request bodies as buffers, required in order to inpsect the body for tx-multicast
+  server.addContentTypeParser('application/json', bodyParser);
+  server.addContentTypeParser('*', bodyParser);
 
   await server.register(proxy, {
     upstream: upstream,
