@@ -9,9 +9,10 @@ import proxy from '@fastify/http-proxy';
 import cors from '@fastify/cors';
 import FastifyMetrics from 'fastify-metrics';
 import { ENV, logger } from './util';
-import { setupShutdownHandler } from './shutdown';
+import { Shutdown } from './shutdown';
 import { isTxMulticastEnabled, performTxMulticast } from './tx-post-multicast';
 import { getCacheControlHeader } from './cache-control';
+import { startPromServer } from './metrics';
 
 // TODO: configure error level strings for grafana/loki?
 
@@ -137,10 +138,16 @@ function handleProxyResponse(
 export async function startServer(): Promise<{
   address: string;
   server: FastifyInstance;
+  promServer: FastifyInstance;
 }> {
-  const server = fastify({ logger, bodyLimit: ENV.MAX_REQUEST_BODY_SIZE });
+  const server = fastify({
+    logger,
+    bodyLimit: ENV.MAX_REQUEST_BODY_SIZE,
+    forceCloseConnections: true,
+  });
 
-  await server.register(FastifyMetrics);
+  // Setup Prometheus metrics, set endpoint to null because we're exposing it via a separate server
+  await server.register(FastifyMetrics, { endpoint: null });
 
   await server.register(cors, {
     preflightContinue: false, // Do _not_ pass the CORS preflight OPTIONS request to stacks-node because its http server doesn't properly support it
@@ -190,10 +197,6 @@ export async function startServer(): Promise<{
     prefix: STACKS_NODE_RPC_PREFIX, // only handle requests that start with this prefix
     rewritePrefix: STACKS_NODE_RPC_PREFIX, // ensure same prefix is used for upstream requests
     proxyPayloads: false,
-    preHandler: (request, reply, done) => {
-      console.log('preHandler');
-      done();
-    },
     replyOptions: {
       onResponse(req, rep, res) {
         handleProxyResponse(
@@ -210,14 +213,27 @@ export async function startServer(): Promise<{
     port: ENV.RPC_PROXY_PORT,
   });
 
+  const promServer = await startPromServer(server.metrics);
+
   return {
     server,
     address,
+    promServer,
   };
 }
 
-Promise.resolve(() => setupShutdownHandler())
+Promise.resolve(() => Shutdown.setupShutdownHandler())
   .then(() => startServer())
+  .then(async (app) => {
+    Shutdown.registerShutdownHandler(async () => {
+      logger.info('Shutting down prometheus server...');
+      await app.promServer.close();
+    });
+    Shutdown.registerShutdownHandler(async () => {
+      logger.info('Shutting down proxy server...');
+      await app.server.close();
+    });
+  })
   .catch((err) => {
     logger.error(err);
     process.exit(1);

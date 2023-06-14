@@ -35,6 +35,8 @@ const schema = Type.Object({
     default: 1024 * 1024 * 2,
     description: 'Max HTTP request body content size in bytes, defaults to 2MB',
   }),
+  PROMETHEUS_HOST: Type.String({ default: '0.0.0.0' }),
+  PROMETHEUS_PORT: Type.Number({ default: 9153 }),
   LOG_RESPONSES: Type.Boolean({
     default: false,
     description:
