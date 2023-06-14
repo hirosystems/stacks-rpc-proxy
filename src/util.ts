@@ -26,10 +26,20 @@ const schema = Type.Object({
   STACKS_CORE_PROXY_HOST: Type.String(),
   STACKS_CORE_PROXY_PORT: Type.Number(),
   STACKS_API_PROXY_CACHE_CONTROL_FILE: Type.String({
-    default: 'config/proxy-cache-control.json',
+    default: './config/proxy-cache-control.json',
   }),
   STACKS_API_EXTRA_TX_ENDPOINTS_FILE: Type.String({
-    default: 'config/extra-tx-endpoints.txt',
+    default: './config/extra-tx-endpoints.txt',
+  }),
+  LOG_RESPONSES: Type.Boolean({
+    default: false,
+    description:
+      'Print upstream response bodies. This increases memory and CPU usage and should only be used for debugging',
+  }),
+  LOG_REQUESTS: Type.Boolean({
+    default: false,
+    description:
+      'Print request bodies. This increases memory and CPU usage and should only be used for debugging',
   }),
 });
 

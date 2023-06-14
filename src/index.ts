@@ -1,15 +1,20 @@
-import { PassThrough, Readable, Transform } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import fastify, {
   FastifyInstance,
   FastifyReply,
   FastifyRequest,
 } from 'fastify';
 import proxy from '@fastify/http-proxy';
-import replyFrom from '@fastify/reply-from';
 import cors from '@fastify/cors';
 import { ENV, logger } from './util';
 import { setupShutdownHandler } from './shutdown';
-import { isTxMulticastEnabled } from './tx-post-multicast';
+import { isTxMulticastEnabled, performTxMulticast } from './tx-post-multicast';
+
+// TODO: prometheus metrics (use same setup as Stacks API?)
+
+// TODO: configure error level strings for grafana/loki?
+
+// TODO: add cache-control header rewriting support
 
 const STACKS_NODE_RPC_PREFIX = '/v2';
 
@@ -33,43 +38,91 @@ const ALLOW_RESPONSE_HEADERS = [
   'X-Api-Version',
 ];
 
-async function postTxMulticast(request: any, reply: any, body: any) {
-  await Promise.resolve();
+async function postTxMulticast(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  res: Readable
+) {
+  const contentType = req.headers['content-type'];
+  await performTxMulticast(req.body as Buffer, contentType);
 }
 
-function createReadablePasssthroughStream(
-  readable: Readable,
-  onBody: (body: Buffer) => void
+/**
+ * Reads the upstream response body to memory and logs it.
+ * @param res Response from upstream
+ * @returns a new readable stream that can be used to send the response body downstream.
+ */
+function addResponseLogging(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  res: Readable
 ) {
-  const readDataStream = new PassThrough();
-  const passthroughStream = new PassThrough();
+  return readPassthrough(res, (body) => {
+    const bodyString = body.toString('utf8');
+    logger.debug(
+      {
+        method: req.method,
+        url: req.url,
+        status: reply.statusCode,
+        response: bodyString,
+      },
+      `Response to ${req.method} ${req.url} returned ${reply.statusCode}: ${bodyString}`
+    );
+  });
+}
 
-  readable.on('data', (chunk) => {
-    readDataStream.write(chunk);
-    passthroughStream.write(chunk);
-  });
-  readable.on('end', () => {
-    readDataStream.end();
-    passthroughStream.end();
-  });
-  readable.on('error', (error) => {
-    readDataStream.destroy(error);
-    passthroughStream.destroy(error);
-  });
+function addRequestLogging(req: FastifyRequest, reply: FastifyReply) {
+  const bodyString =
+    (req.body as Buffer)?.toString('utf8') ?? '<no request body>';
+  logger.debug(
+    {
+      method: req.method,
+      url: req.url,
+      request: bodyString,
+    },
+    `Request to ${req.method} ${req.url}: ${bodyString}`
+  );
+  return req;
+}
 
-  // Now we can also read from originalStream in the background.
+function readPassthrough(readable: Readable, onBody: (body: Buffer) => void) {
   const chunks: Buffer[] = [];
-  readDataStream.on('data', (chunk: Buffer) => {
-    chunks.push(chunk);
+  const transform = new Transform({
+    autoDestroy: true,
+    emitClose: true,
+    transform(chunk, _encoding, callback) {
+      chunks.push(chunk);
+      callback(null, chunk);
+    },
   });
-  readDataStream.on('end', () => {
-    const body = Buffer.concat(chunks);
-    logger.debug(`Received body: ${body.byteLength} bytes`);
+  transform.on('close', () => {
+    const body = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
     onBody(body);
   });
+  return readable.pipe(transform);
+}
 
-  // Return the PassThrough stream so the caller can also read from it.
-  return passthroughStream;
+function handleProxyResponse(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  response: Readable
+) {
+  if (ENV.LOG_REQUESTS) {
+    request = addRequestLogging(request, reply);
+  }
+  if (ENV.LOG_RESPONSES) {
+    response = addResponseLogging(request, reply, response);
+  }
+  if (
+    isTxMulticastEnabled() &&
+    request.method === 'POST' &&
+    request.url === '/v2/transactions'
+  ) {
+    postTxMulticast(request, reply, response).catch((error) => {
+      logger.error(error, `Error performing tx-multicast: ${error}`);
+    });
+  }
+  reply.send(response);
 }
 
 export async function startServer(): Promise<{
@@ -86,71 +139,48 @@ export async function startServer(): Promise<{
     exposedHeaders: ALLOW_RESPONSE_HEADERS,
   });
 
-  /*
-  server.addContentTypeParser(
-    'application/octet-stream',
-    (req, payload, done) => {
-      done(null, payload);
-    }
-  );
-
-  server.addContentTypeParser('application/json', (req, payload, done) => {
-    done(null, payload);
-  });
-
-  server.addContentTypeParser('*', (req, payload, done) => {
-    done(null, payload);
-  });
-
-  await server.register(proxy, {
-    upstream: `http://${ENV.STACKS_CORE_PROXY_HOST}:${ENV.STACKS_CORE_PROXY_PORT}/v2/transactions`,
-    prefix: '/v2/transactions',
-    proxyPayloads: false,
-    preHandler: async (request, reply) => {
-      const body = request.body;
-    },
-    replyOptions: {
-      onResponse(request, reply, res) {
-        reply.send(res);
-      },
-    },
-  });
-  */
-
   // Note: paths in upstream are ignored
   const upstream = `http://${ENV.STACKS_CORE_PROXY_HOST}:${ENV.STACKS_CORE_PROXY_PORT}${STACKS_NODE_RPC_PREFIX}`;
   logger.info(`Proxying to upstream: ${upstream}`);
+
+  server.addContentTypeParser('application/json', (req, payload, done) => {
+    const chunks: Uint8Array[] = [];
+    payload.on('data', (chunk) => chunks.push(chunk));
+    payload.on('end', () => done(null, Buffer.concat(chunks)));
+    payload.on('error', (error) => {
+      done(error, null);
+    });
+  });
+
+  server.addContentTypeParser('*', (req, payload, done) => {
+    const chunks: Uint8Array[] = [];
+    payload.on('data', (chunk) => chunks.push(chunk));
+    payload.on('end', () => done(null, Buffer.concat(chunks)));
+    payload.on('error', (error) => {
+      done(error, null);
+    });
+  });
 
   await server.register(proxy, {
     upstream: upstream,
     prefix: STACKS_NODE_RPC_PREFIX, // only handle requests that start with this prefix
     rewritePrefix: STACKS_NODE_RPC_PREFIX, // ensure same prefix is used for upstream requests
+    proxyPayloads: false,
+    preHandler: (request, reply, done) => {
+      console.log('preHandler');
+      done();
+    },
     replyOptions: {
       rewriteRequestHeaders(request, headers) {
         headers['x-test'] = '1234';
         return headers;
       },
-      onResponse(request, reply, res) {
-        if (
-          isTxMulticastEnabled() &&
-          request.method === 'POST' &&
-          request.url === '/v2/transactions'
-        ) {
-          postTxMulticast(request, reply, null).catch((error) => {
-            logger.error(error, `Error performing tx-multicast: ${error}`);
-          });
-        }
-        const readable = createReadablePasssthroughStream(
-          res as unknown as Readable,
-          (body) => {
-            const bodyString = body.toString();
-            console.log(bodyString);
-          }
+      onResponse(req, rep, res) {
+        handleProxyResponse(
+          req as FastifyRequest,
+          rep as FastifyReply,
+          res as unknown as Readable
         );
-        reply.send(readable);
-        // TODO: good area for doing tx-multicast?
-        // res.setHeader('x-test', '4567');
-        // reply.send(res);
       },
     },
   });

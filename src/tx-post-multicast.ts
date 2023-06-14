@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import { request } from 'undici';
 import { ENV, logger } from './util';
 
 export function isTxMulticastEnabled(): boolean {
@@ -17,7 +18,7 @@ async function getExtraTxPostEndpoints(): Promise<string[] | false> {
   if (!extraEndpointsFile) {
     return false;
   }
-  const filePath = path.resolve(__dirname, extraEndpointsFile);
+  const filePath = path.resolve(extraEndpointsFile);
   let fileContents: string;
   try {
     fileContents = await fs.readFile(filePath, { encoding: 'utf8' });
@@ -33,4 +34,40 @@ async function getExtraTxPostEndpoints(): Promise<string[] | false> {
     return false;
   }
   return endpoints;
+}
+
+export async function performTxMulticast(
+  txData: Buffer,
+  contentType: string | undefined
+) {
+  const extraTxPostEndpoints = await getExtraTxPostEndpoints();
+  if (!extraTxPostEndpoints) {
+    return;
+  }
+  const mutlicastPromises = extraTxPostEndpoints.map(async (endpoint) => {
+    try {
+      let url = endpoint;
+      if (!endpoint.startsWith('http://') || !endpoint.startsWith('https://')) {
+        url = `http://${endpoint}`;
+      }
+      let parsedUrl = new URL(url);
+      if (parsedUrl.pathname === '/') {
+        parsedUrl = new URL('/v2/transactions', parsedUrl);
+      }
+      await request(parsedUrl, {
+        method: 'POST',
+        body: txData,
+        headers: {
+          'Content-Type': contentType,
+        },
+        throwOnError: true,
+      });
+    } catch (error) {
+      logger.warn(
+        error,
+        `Error performing tx-multicast to ${endpoint}: ${error}`
+      );
+    }
+  });
+  await Promise.allSettled(mutlicastPromises);
 }
