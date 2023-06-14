@@ -7,12 +7,11 @@ import fastify, {
 } from 'fastify';
 import proxy from '@fastify/http-proxy';
 import cors from '@fastify/cors';
+import FastifyMetrics from 'fastify-metrics';
 import { ENV, logger } from './util';
 import { setupShutdownHandler } from './shutdown';
 import { isTxMulticastEnabled, performTxMulticast } from './tx-post-multicast';
 import { getCacheControlHeader } from './cache-control';
-
-// TODO: prometheus metrics (use same setup as Stacks API?)
 
 // TODO: configure error level strings for grafana/loki?
 
@@ -140,6 +139,8 @@ export async function startServer(): Promise<{
   server: FastifyInstance;
 }> {
   const server = fastify({ logger, bodyLimit: ENV.MAX_REQUEST_BODY_SIZE });
+
+  await server.register(FastifyMetrics);
 
   await server.register(cors, {
     preflightContinue: false, // Do _not_ pass the CORS preflight OPTIONS request to stacks-node because its http server doesn't properly support it
