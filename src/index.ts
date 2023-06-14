@@ -14,8 +14,6 @@ import { isTxMulticastEnabled, performTxMulticast } from './tx-post-multicast';
 import { getCacheControlHeader } from './cache-control';
 import { startPromServer } from './metrics';
 
-// TODO: configure error level strings for grafana/loki?
-
 const STACKS_NODE_RPC_PREFIX = '/v2';
 
 // Access-Control-Request-Method

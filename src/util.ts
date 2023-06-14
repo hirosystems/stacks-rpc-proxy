@@ -25,12 +25,17 @@ const schema = Type.Object({
   RPC_PROXY_PORT: Type.Number({ default: 5444 }),
   STACKS_CORE_PROXY_HOST: Type.String(),
   STACKS_CORE_PROXY_PORT: Type.Number(),
-  STACKS_API_PROXY_CACHE_CONTROL_FILE: Type.String({
-    description: 'Path to JSON file containing cache-control config for paths',
-  }),
-  STACKS_API_EXTRA_TX_ENDPOINTS_FILE: Type.String({
-    description: 'Additional stacks-node endpoints to POST transactions to',
-  }),
+  STACKS_API_PROXY_CACHE_CONTROL_FILE: Type.Optional(
+    Type.String({
+      description:
+        'Path to JSON file containing cache-control config for paths',
+    })
+  ),
+  STACKS_API_EXTRA_TX_ENDPOINTS_FILE: Type.Optional(
+    Type.String({
+      description: 'Additional stacks-node endpoints to POST transactions to',
+    })
+  ),
   MAX_REQUEST_BODY_SIZE: Type.Number({
     default: 1024 * 1024 * 2,
     description: 'Max HTTP request body content size in bytes, defaults to 2MB',
@@ -56,12 +61,14 @@ export const ENV = envSchema<Static<typeof schema>>({
 
 export const loggerOpts: pino.LoggerOptions = {
   level: ENV.LOG_LEVEL,
+  formatters: { level: (level) => ({ level }) },
 };
 if (ENV.NODE_ENV !== 'production') {
   loggerOpts.transport = {
     target: 'pino-pretty',
     options: {
       colorize: true,
+      ignore: 'hostname,pid',
     },
   };
 }
