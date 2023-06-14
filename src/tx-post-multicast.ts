@@ -1,6 +1,13 @@
-import * as path from 'path';
-import * as fs from 'fs';
+import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import { ENV, logger } from './util';
+
+export function isTxMulticastEnabled(): boolean {
+  const extraEndpointsFile = ENV.STACKS_API_EXTRA_TX_ENDPOINTS_FILE;
+  return (
+    extraEndpointsFile !== undefined && extraEndpointsFile.trim().length !== 0
+  );
+}
 
 /**
  * Check for any extra endpoints that have been configured for performing a "multicast" for a tx submission.
@@ -13,7 +20,7 @@ async function getExtraTxPostEndpoints(): Promise<string[] | false> {
   const filePath = path.resolve(__dirname, extraEndpointsFile);
   let fileContents: string;
   try {
-    fileContents = await fs.promises.readFile(filePath, { encoding: 'utf8' });
+    fileContents = await fs.readFile(filePath, { encoding: 'utf8' });
   } catch (error) {
     logger.error(`Error reading ${extraEndpointsFile}: ${error}`, error);
     return false;

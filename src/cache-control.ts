@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+import * as fs from 'node:fs';
 import * as jsoncParser from 'jsonc-parser';
 import * as chokidar from 'chokidar';
 import { ENV, logger } from './util';
