@@ -8,7 +8,8 @@
     "test": "jest",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "build": "tsc"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -24,8 +25,10 @@
     "chokidar": "3.5.3",
     "env-schema": "5.2.0",
     "fastify": "4.17.0",
+    "fastify-metrics": "10.3.0",
     "jsonc-parser": "3.2.0",
-    "pino": "8.14.1"
+    "pino": "8.14.1",
+    "undici": "5.22.1"
   },
   "devDependencies": {
     "@types/jest": "29.5.1",

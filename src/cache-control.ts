@@ -1,22 +1,27 @@
-import * as fs from 'fs';
+import * as fs from 'node:fs';
 import * as jsoncParser from 'jsonc-parser';
 import * as chokidar from 'chokidar';
 import { ENV, logger } from './util';
 
 let pathCacheOptions = readCacheOptions();
 
-chokidar
-  .watch(ENV.STACKS_API_PROXY_CACHE_CONTROL_FILE, {
-    persistent: false,
-    useFsEvents: false,
-    ignoreInitial: true,
-  })
-  .on('all', (_eventName, _path, _stats) => {
-    pathCacheOptions = readCacheOptions();
-  });
+if (ENV.STACKS_API_PROXY_CACHE_CONTROL_FILE) {
+  chokidar
+    .watch(ENV.STACKS_API_PROXY_CACHE_CONTROL_FILE, {
+      persistent: false,
+      useFsEvents: false,
+      ignoreInitial: true,
+    })
+    .on('all', (_eventName, _path, _stats) => {
+      pathCacheOptions = readCacheOptions();
+    });
+}
 
 function readCacheOptions(): Map<RegExp, string | null> {
   const proxyCacheControlFile = ENV.STACKS_API_PROXY_CACHE_CONTROL_FILE;
+  if (!proxyCacheControlFile) {
+    return new Map();
+  }
   logger.info(`Using cache config file: ${proxyCacheControlFile}`);
 
   try {
